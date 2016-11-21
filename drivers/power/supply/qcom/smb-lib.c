@@ -809,56 +809,92 @@ static int smblib_get_pulse_cnt(struct smb_charger *chg, int *count)
 #define USBIN_150MA	150000
 #define USBIN_500MA	500000
 #define USBIN_900MA	900000
-
+#define USBIN_1500MA	1500000
 static int set_sdp_current(struct smb_charger *chg, int icl_ua)
 {
-	int rc;
+	int pd_icl_ua, default_icl_ua, usb_icl_ua;
+	int rc = 0;
 	u8 icl_options;
-	const struct apsd_result *apsd_result = smblib_get_apsd_result(chg);
 
-	/* power source is SDP */
-	switch (icl_ua) {
-	case USBIN_100MA:
-		/* USB 2.0 100mA */
-		icl_options = 0;
+	pd_icl_ua = get_client_vote_locked(chg->usb_icl_votable, PD_VOTER);
+	default_icl_ua = get_client_vote_locked(chg->usb_icl_votable, DEFAULT_VOTER);
+	usb_icl_ua = get_client_vote_locked(chg->usb_icl_votable, USB_PSY_VOTER);
+
+	/* PD and Type-C current */
+	if (pd_icl_ua > 0) {
+		/* update ICL */
+		rc = smblib_set_charge_param(chg, &chg->param.usb_icl,
+					     pd_icl_ua);
+		if (rc < 0)
+			return rc;
+		/* switch to High-Current mode */
+		rc = smblib_masked_write(chg, USBIN_ICL_OPTIONS_REG,
+					 USBIN_MODE_CHG_BIT,
+					 USBIN_MODE_CHG_BIT);
+		if (rc < 0)
+			return rc;
+		/* override APSD ICL limit */
+		rc = smblib_masked_write(chg, CMD_APSD_REG,
+					 ICL_OVERRIDE_BIT,
+					 ICL_OVERRIDE_BIT);
+		if (rc < 0)
+			return rc;
+		chg->current_max_ua = pd_icl_ua;
+		return rc;
+	}
+
+	if (pd_icl_ua == 0) {
+		rc = smblib_masked_write(chg, USBIN_ICL_OPTIONS_REG,
+					 USBIN_MODE_CHG_BIT,
+					 0);
+		if (rc < 0)
+			return rc;
+	}
+
+	/* Type-C default, i.e. APSD result */
+	if (default_icl_ua > 0) {
+		rc = smblib_set_charge_param(chg, &chg->param.usb_icl,
+					     default_icl_ua);
+		if (rc < 0)
+			return rc;
+	}
+
+	switch (chg->usb_psy_desc.type) {
+	case POWER_SUPPLY_TYPE_USB_DCP:
+		chg->current_max_ua = USBIN_1500MA;
+		rc = smblib_masked_write(chg, USBIN_ICL_OPTIONS_REG,
+					 USBIN_MODE_CHG_BIT,
+					 USBIN_MODE_CHG_BIT);
 		break;
-	case USBIN_150MA:
-		/* USB 3.0 150mA */
-		icl_options = CFG_USB3P0_SEL_BIT;
+	case POWER_SUPPLY_TYPE_USB_CDP:
+		chg->current_max_ua = USBIN_1500MA;
+		rc = smblib_masked_write(chg, USBIN_ICL_OPTIONS_REG,
+					 USBIN_MODE_CHG_BIT,
+					 USBIN_MODE_CHG_BIT);
 		break;
-	case USBIN_500MA:
-		/* USB 2.0 500mA */
-		icl_options = USB51_MODE_BIT;
-		break;
-	case USBIN_900MA:
-		/* USB 3.0 900mA */
-		icl_options = CFG_USB3P0_SEL_BIT | USB51_MODE_BIT;
+	case POWER_SUPPLY_TYPE_USB:
+		if (usb_icl_ua < USBIN_25MA)
+			icl_options = 0;
+		else if (usb_icl_ua == USBIN_100MA)
+			icl_options = 0;
+		else if (usb_icl_ua == USBIN_150MA)
+			icl_options = CFG_USB3P0_SEL_BIT;
+		else if (usb_icl_ua == USBIN_500MA)
+			icl_options = USB51_MODE_BIT;
+		else if (usb_icl_ua == USBIN_900MA)
+			icl_options = CFG_USB3P0_SEL_BIT | USB51_MODE_BIT;
+		else
+			smblib_err(chg, "ICL %duA isn't supported for SDP\n",
+				   icl_ua);
+		chg->current_max_ua = usb_icl_ua >= 0 ? usb_icl_ua : 0;
+		rc = smblib_masked_write(chg, USBIN_ICL_OPTIONS_REG,
+					 CFG_USB3P0_SEL_BIT | USB51_MODE_BIT |
+					 USBIN_MODE_CHG_BIT,
+					 icl_options);
 		break;
 	default:
-		smblib_err(chg, "ICL %duA isn't supported for SDP\n", icl_ua);
-		return -EINVAL;
-	}
-
-	if (chg->real_charger_type == POWER_SUPPLY_TYPE_USB &&
-		apsd_result->pst == POWER_SUPPLY_TYPE_USB_FLOAT) {
-		/*
-		 * change the float charger configuration to SDP, if this
-		 * is the case of SDP being detected as FLOAT
-		 */
-		rc = smblib_masked_write(chg, USBIN_OPTIONS_2_CFG_REG,
-			FORCE_FLOAT_SDP_CFG_BIT, FORCE_FLOAT_SDP_CFG_BIT);
-		if (rc < 0) {
-			smblib_err(chg, "Couldn't set float ICL options rc=%d\n",
-						rc);
-			return rc;
-		}
-	}
-
-	rc = smblib_masked_write(chg, USBIN_ICL_OPTIONS_REG,
-		CFG_USB3P0_SEL_BIT | USB51_MODE_BIT, icl_options);
-	if (rc < 0) {
-		smblib_err(chg, "Couldn't set ICL options rc=%d\n", rc);
-		return rc;
+		chg->current_max_ua = 0;
+		break;
 	}
 
 	return rc;
@@ -2672,12 +2708,21 @@ int smblib_set_prop_pd_current_max(struct smb_charger *chg,
 				    const union power_supply_propval *val)
 {
 	int rc;
+	int icl_ua = val->intval;
 
-	if (chg->pd_active)
-		rc = vote(chg->usb_icl_votable, PD_VOTER, true, val->intval);
-	else
-		rc = -EPERM;
+	if (icl_ua < 0)
+		return -EINVAL;
 
+	rc = vote(chg->usb_icl_votable, PD_VOTER, true, icl_ua);
+	if (rc < 0) {
+		smblib_err(chg, "Couldn't vote PD ICL %d, rc=%d\n",
+			   icl_ua, rc);
+		return rc;
+	}
+	rc = rerun_election(chg->usb_icl_votable);
+	if (rc < 0)
+		smblib_err(chg, "Couldn't rerun icl votable election, rc=%d\n",
+			   rc);
 	return rc;
 }
 
@@ -4120,9 +4165,9 @@ static void smblib_handle_typec_removal(struct smb_charger *chg)
 
 	/* reconfigure allowed voltage for HVDCP */
 	rc = smblib_set_adapter_allowance(chg,
-			USBIN_ADAPTER_ALLOW_5V_OR_9V_TO_12V);
+			USBIN_ADAPTER_ALLOW_5V_OR_9V);
 	if (rc < 0)
-		smblib_err(chg, "Couldn't set USBIN_ADAPTER_ALLOW_5V_OR_9V_TO_12V rc=%d\n",
+		smblib_err(chg, "Couldn't set USBIN_ADAPTER_ALLOW_5V_OR_9V rc=%d\n",
 			rc);
 
 	/* enable DRP */
