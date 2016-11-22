@@ -470,6 +470,8 @@ int smblib_get_prop_typec_power_role(struct smb_charger *chg,
 				union power_supply_propval *val);
 int smblib_get_prop_pd_allowed(struct smb_charger *chg,
 				union power_supply_propval *val);
+int smblib_get_prop_pd_apsd_done(struct smb_charger *chg,
+				union power_supply_propval *val);
 int smblib_get_prop_input_current_settled(struct smb_charger *chg,
 				union power_supply_propval *val);
 int smblib_get_prop_input_voltage_settled(struct smb_charger *chg,
