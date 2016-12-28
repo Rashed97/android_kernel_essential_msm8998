@@ -352,6 +352,7 @@ static enum power_supply_property smb2_usb_props[] = {
 	POWER_SUPPLY_PROP_PD_VOLTAGE_MAX,
 	POWER_SUPPLY_PROP_PD_VOLTAGE_MIN,
 	POWER_SUPPLY_PROP_SDP_CURRENT_MAX,
+	POWER_SUPPLY_PROP_USE_EXTERNAL_VBUS_OUTPUT,
 };
 
 static int smb2_usb_get_prop(struct power_supply *psy,
@@ -470,6 +471,9 @@ static int smb2_usb_get_prop(struct power_supply *psy,
 		val->intval = get_client_vote(chg->usb_icl_votable,
 					      USB_PSY_VOTER);
 		break;
+	case POWER_SUPPLY_PROP_USE_EXTERNAL_VBUS_OUTPUT:
+		rc = smblib_get_prop_use_external_vbus_output(chg, val);
+		break;
 	default:
 		pr_err("get prop %d is not supported in usb\n", psp);
 		rc = -EINVAL;
@@ -534,6 +538,9 @@ static int smb2_usb_set_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_PD_CC_OVERRIDE:
 		rc = smblib_set_prop_pd_cc_override(chg, val);
 		break;
+	case POWER_SUPPLY_PROP_USE_EXTERNAL_VBUS_OUTPUT:
+		rc = smblib_set_prop_use_external_vbus_output(chg, val);
+		break;
 	default:
 		pr_err("set prop %d is not supported\n", psp);
 		rc = -EINVAL;
@@ -550,6 +557,8 @@ static int smb2_usb_prop_is_writeable(struct power_supply *psy,
 {
 	switch (psp) {
 	case POWER_SUPPLY_PROP_CTM_CURRENT_MAX:
+		return 1;
+	case POWER_SUPPLY_PROP_USE_EXTERNAL_VBUS_OUTPUT:
 		return 1;
 	default:
 		break;

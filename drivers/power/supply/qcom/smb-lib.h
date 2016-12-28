@@ -243,6 +243,7 @@ struct smb_charger {
 	struct mutex		ps_change_lock;
 	struct mutex		otg_oc_lock;
 	struct mutex		vconn_oc_lock;
+	struct mutex		vbus_output_lock; /* for vbus output states */
 
 	/* power supplies */
 	struct power_supply		*batt_psy;
@@ -264,6 +265,7 @@ struct smb_charger {
 	struct smb_regulator	*vbus_vreg;
 	struct smb_regulator	*vconn_vreg;
 	struct regulator	*dpdm_reg;
+	struct regulator	*external_vbus_reg;
 
 	/* votables */
 	struct votable		*dc_suspend_votable;
@@ -336,6 +338,7 @@ struct smb_charger {
 	bool			use_extcon;
 	bool			otg_present;
 
+	bool			use_external_vbus_reg;
 	/* workaround flag */
 	u32			wa_flags;
 	bool			cc2_detach_wa_active;
@@ -480,6 +483,8 @@ int smblib_get_prop_pd_in_hard_reset(struct smb_charger *chg,
 			       union power_supply_propval *val);
 int smblib_get_pe_start(struct smb_charger *chg,
 			       union power_supply_propval *val);
+int smblib_get_prop_use_external_vbus_output(struct smb_charger *chg,
+				union power_supply_propval *val);
 int smblib_get_prop_charger_temp(struct smb_charger *chg,
 				union power_supply_propval *val);
 int smblib_get_prop_charger_temp_max(struct smb_charger *chg,
@@ -505,6 +510,8 @@ int smblib_set_prop_pd_active(struct smb_charger *chg,
 int smblib_set_prop_pd_cc_override(struct smb_charger *chg,
 				const union power_supply_propval *val);
 int smblib_set_prop_pd_in_hard_reset(struct smb_charger *chg,
+				const union power_supply_propval *val);
+int smblib_set_prop_use_external_vbus_output(struct smb_charger *chg,
 				const union power_supply_propval *val);
 int smblib_get_prop_slave_current_now(struct smb_charger *chg,
 				union power_supply_propval *val);

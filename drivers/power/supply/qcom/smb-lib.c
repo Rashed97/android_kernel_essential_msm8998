@@ -1401,9 +1401,8 @@ out:
 	return rc;
 }
 
-static int _smblib_vbus_regulator_enable(struct regulator_dev *rdev)
+static int _smblib_vbus_regulator_enable(struct smb_charger *chg)
 {
-	struct smb_charger *chg = rdev_get_drvdata(rdev);
 	int rc;
 
 	smblib_dbg(chg, PR_OTG, "halt 1 in 8 mode\n");
@@ -1431,9 +1430,8 @@ static int _smblib_vbus_regulator_enable(struct regulator_dev *rdev)
 	return rc;
 }
 
-int smblib_vbus_regulator_enable(struct regulator_dev *rdev)
+static int smblib_otg_enable(struct smb_charger *chg)
 {
-	struct smb_charger *chg = rdev_get_drvdata(rdev);
 	int rc = 0;
 
 	mutex_lock(&chg->otg_oc_lock);
@@ -1448,7 +1446,7 @@ int smblib_vbus_regulator_enable(struct regulator_dev *rdev)
 	}
 	vote(chg->usb_icl_votable, USBIN_USBIN_BOOST_VOTER, true, 0);
 
-	rc = _smblib_vbus_regulator_enable(rdev);
+	rc = _smblib_vbus_regulator_enable(chg);
 	if (rc >= 0)
 		chg->otg_en = true;
 
@@ -1457,9 +1455,8 @@ unlock:
 	return rc;
 }
 
-static int _smblib_vbus_regulator_disable(struct regulator_dev *rdev)
+static int _smblib_vbus_regulator_disable(struct smb_charger *chg)
 {
-	struct smb_charger *chg = rdev_get_drvdata(rdev);
 	int rc;
 
 	if (chg->wa_flags & OTG_WA) {
@@ -1491,16 +1488,15 @@ static int _smblib_vbus_regulator_disable(struct regulator_dev *rdev)
 	return 0;
 }
 
-int smblib_vbus_regulator_disable(struct regulator_dev *rdev)
+static int smblib_otg_disable(struct smb_charger *chg)
 {
-	struct smb_charger *chg = rdev_get_drvdata(rdev);
 	int rc = 0;
 
 	mutex_lock(&chg->otg_oc_lock);
 	if (!chg->otg_en)
 		goto unlock;
 
-	rc = _smblib_vbus_regulator_disable(rdev);
+	rc = _smblib_vbus_regulator_disable(chg);
 	if (rc >= 0)
 		chg->otg_en = false;
 
@@ -1511,15 +1507,125 @@ unlock:
 	return rc;
 }
 
-int smblib_vbus_regulator_is_enabled(struct regulator_dev *rdev)
+static int smblib_otg_is_enabled(struct smb_charger *chg)
 {
-	struct smb_charger *chg = rdev_get_drvdata(rdev);
 	int ret;
 
 	mutex_lock(&chg->otg_oc_lock);
 	ret = chg->otg_en;
 	mutex_unlock(&chg->otg_oc_lock);
 	return ret;
+}
+
+int smblib_vbus_regulator_enable(struct regulator_dev *rdev)
+{
+	struct smb_charger *chg = rdev_get_drvdata(rdev);
+	int rc = 0;
+
+	mutex_lock(&chg->vbus_output_lock);
+
+	if (chg->use_external_vbus_reg) {
+		/* output:off, source:external -> output:on, source:external */
+		if (!chg->external_vbus_reg) {
+			smblib_err(chg,
+				   "No external vbus regulator available\n");
+			rc = -ENODEV;
+			goto unlock;
+		}
+
+		rc = smblib_set_usb_suspend(chg, true);
+		if (rc < 0)
+			goto unlock;
+
+		if (!regulator_is_enabled(chg->external_vbus_reg)) {
+			smblib_dbg(chg, PR_MISC,
+				   "Enabling external vbus regulator\n");
+			rc = regulator_enable(chg->external_vbus_reg);
+			if (rc < 0)
+				smblib_err(chg,
+					   "Couldn't enable external vbus regualtor rc=%d\n",
+					   rc);
+		}
+	} else {
+		/* output:off, source:internal -> output:on, source:internal */
+		rc = smblib_otg_enable(chg);
+	}
+
+unlock:
+	mutex_unlock(&chg->vbus_output_lock);
+	return rc;
+}
+
+int smblib_vbus_regulator_disable(struct regulator_dev *rdev)
+{
+	struct smb_charger *chg = rdev_get_drvdata(rdev);
+	int rc = 0;
+
+	mutex_lock(&chg->vbus_output_lock);
+
+	if (chg->use_external_vbus_reg) {
+		/* output:on, source:external -> output:off, source:external */
+		if (!chg->external_vbus_reg) {
+			smblib_err(chg,
+				   "No external vbus regulator available\n");
+			rc = -ENODEV;
+			goto unlock;
+		}
+
+		if (regulator_is_enabled(chg->external_vbus_reg)) {
+			smblib_dbg(chg, PR_MISC,
+				   "Disabling external vbus regulator\n");
+			rc = regulator_disable(chg->external_vbus_reg);
+			if (rc < 0) {
+				smblib_err(chg,
+					   "Couldn't disable external vbus regualtor rc=%d\n",
+					   rc);
+				goto unlock;
+			}
+		}
+	} else {
+		/* output:on, source:internal -> output:off, source:internal */
+		rc = smblib_otg_disable(chg);
+		if (rc < 0)
+			goto unlock;
+	}
+
+	rc = smblib_set_usb_suspend(chg, false);
+
+unlock:
+	mutex_unlock(&chg->vbus_output_lock);
+	return rc;
+}
+
+static int smblib_vbus_regulator_is_enabled_locked(struct smb_charger *chg)
+{
+	int internal_rc = 0;
+	int external_rc = 0;
+
+	internal_rc = smblib_otg_is_enabled(chg);
+	if (internal_rc < 0)
+		return internal_rc;
+
+	if (!chg->external_vbus_reg)
+		return internal_rc;
+
+	external_rc = regulator_is_enabled(chg->external_vbus_reg);
+	if (external_rc < 0)
+		return external_rc;
+
+	return internal_rc || external_rc;
+}
+
+int smblib_vbus_regulator_is_enabled(struct regulator_dev *rdev)
+{
+	struct smb_charger *chg = rdev_get_drvdata(rdev);
+	int rc = 0;
+
+	mutex_lock(&chg->vbus_output_lock);
+	rc = smblib_vbus_regulator_is_enabled_locked(chg);
+	mutex_unlock(&chg->vbus_output_lock);
+
+	return rc;
 }
 
 /********************
@@ -2549,6 +2655,15 @@ static int get_rp_based_dcp_current(struct smb_charger *chg, int typec_mode)
 	return rp_ua;
 }
 
+int smblib_get_prop_use_external_vbus_output(struct smb_charger *chg,
+					     union power_supply_propval *val)
+{
+	mutex_lock(&chg->vbus_output_lock);
+	val->intval = chg->use_external_vbus_reg ? 1 : 0;
+	mutex_unlock(&chg->vbus_output_lock);
+	return 0;
+}
+
 /*******************
  * USB PSY SETTERS *
  * *****************/
@@ -3197,6 +3312,77 @@ int smblib_get_charge_current(struct smb_charger *chg,
 
 	*total_current_ua = max(current_ua, val.intval);
 	return 0;
+}
+
+int smblib_set_prop_use_external_vbus_output(struct smb_charger *chg,
+				const union power_supply_propval *val)
+{
+	bool value;
+	int rc = 0;
+
+	value = !!val->intval;
+
+	mutex_lock(&chg->vbus_output_lock);
+
+	if (value == chg->use_external_vbus_reg)
+		goto unlock;
+
+	if (!smblib_vbus_regulator_is_enabled_locked(chg)) {
+		chg->use_external_vbus_reg = value;
+		goto unlock;
+	}
+
+	/* switch the source while vbus output is on */
+	if (value) {
+		smblib_dbg(chg, PR_MISC,
+			   "VBUS output source: internal -> external\n");
+
+		if (!chg->external_vbus_reg) {
+			smblib_err(chg,
+				   "No external vbus regulator available\n");
+			rc = -ENODEV;
+			goto unlock;
+		}
+
+		rc = smblib_set_usb_suspend(chg, true);
+		if (rc < 0)
+			goto unlock;
+
+		rc = regulator_enable(chg->external_vbus_reg);
+		if (rc < 0) {
+			smblib_err(chg, "Couldn't enable external vbus rc=%d\n",
+				   rc);
+			goto unlock;
+		}
+
+		rc = smblib_otg_disable(chg);
+		if (rc < 0)
+			goto unlock;
+	} else {
+		smblib_dbg(chg, PR_MISC,
+			   "VBUS output source: external -> internal\n");
+		rc = smblib_otg_enable(chg);
+		if (rc < 0)
+			goto unlock;
+
+		rc = regulator_disable(chg->external_vbus_reg);
+		if (rc < 0) {
+			smblib_err(chg,
+				   "Couldn't disable external vbus rc=%d\n",
+				   rc);
+			goto unlock;
+		}
+
+		rc = smblib_set_usb_suspend(chg, false);
+		if (rc < 0)
+			goto unlock;
+	}
+
+	chg->use_external_vbus_reg = value;
+
+unlock:
+	mutex_unlock(&chg->vbus_output_lock);
+	return rc;
 }
 
 /************************
@@ -4455,7 +4641,7 @@ static void smblib_otg_oc_work(struct work_struct *work)
 	 */
 	schedule_delayed_work(&chg->otg_ss_done_work, msecs_to_jiffies(500));
 
-	rc = _smblib_vbus_regulator_disable(chg->vbus_vreg->rdev);
+	rc = _smblib_vbus_regulator_disable(chg);
 	if (rc < 0) {
 		smblib_err(chg, "Couldn't disable VBUS rc=%d\n", rc);
 		goto unlock;
@@ -4489,7 +4675,7 @@ static void smblib_otg_oc_work(struct work_struct *work)
 	}
 
 	smblib_dbg(chg, PR_OTG, "OTG OC fell after %dms\n", 2 * i + 1);
-	rc = _smblib_vbus_regulator_enable(chg->vbus_vreg->rdev);
+	rc = _smblib_vbus_regulator_enable(chg);
 	if (rc < 0) {
 		smblib_err(chg, "Couldn't enable VBUS rc=%d\n", rc);
 		goto unlock;
@@ -4856,6 +5042,7 @@ int smblib_init(struct smb_charger *chg)
 	mutex_init(&chg->write_lock);
 	mutex_init(&chg->otg_oc_lock);
 	mutex_init(&chg->vconn_oc_lock);
+	mutex_init(&chg->vbus_output_lock);
 	INIT_WORK(&chg->bms_update_work, bms_update_work);
 	INIT_WORK(&chg->rdstd_cc2_detach_work, rdstd_cc2_detach_work);
 	INIT_DELAYED_WORK(&chg->hvdcp_detect_work, smblib_hvdcp_detect_work);
@@ -4901,6 +5088,21 @@ int smblib_init(struct smb_charger *chg)
 				"Couldn't register notifier rc=%d\n", rc);
 			return rc;
 		}
+
+		if (of_get_property(chg->dev->of_node,
+				    "external-vbus-supply", NULL)) {
+			chg->external_vbus_reg = devm_regulator_get(chg->dev,
+							"external-vbus");
+			if (IS_ERR(chg->external_vbus_reg)) {
+				rc = PTR_ERR(chg->external_vbus_reg);
+				smblib_err(chg,
+					   "Couldn't get external vbus regulator rc=%d\n",
+					   rc);
+				chg->external_vbus_reg = NULL;
+			}
+		}
+		if (rc < 0)
+			return rc;
 
 		chg->bms_psy = power_supply_get_by_name("bms");
 		chg->pl.psy = power_supply_get_by_name("parallel");
