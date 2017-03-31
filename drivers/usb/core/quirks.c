@@ -255,6 +255,9 @@ static const struct usb_device_id usb_quirk_list[] = {
 	/* INTEL VALUE SSD */
 	{ USB_DEVICE(0x8086, 0xf1a5), .driver_info = USB_QUIRK_RESET_RESUME },
 
+	/* Essential USB-C 3.5mm Audio Dongle */
+	{ USB_DEVICE(0x2e17, 0xa001), .driver_info = USB_QUIRK_NO_LPM },
+
 	/* Google USB-C 3.5mm Audio Dongle */
 	{ USB_DEVICE(0x18d1, 0x5025), .driver_info = USB_QUIRK_NO_LPM },
 
