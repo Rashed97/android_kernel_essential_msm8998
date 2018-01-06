@@ -44,6 +44,8 @@
 
 #define subsys_to_drv(d) container_of(d, struct modem_data, subsys_desc)
 
+char mfr_failure_reason[MAX_SSR_REASON_LEN];
+
 static void log_modem_sfr(void)
 {
 	u32 size;
@@ -62,6 +64,8 @@ static void log_modem_sfr(void)
 
 	strlcpy(reason, smem_reason, min(size, MAX_SSR_REASON_LEN));
 	pr_err("modem subsystem failure reason: %s.\n", reason);
+
+	strlcpy(mfr_failure_reason, smem_reason, min(size, MAX_SSR_REASON_LEN));
 
 	smem_reason[0] = '\0';
 	wmb();
@@ -171,8 +175,7 @@ static int modem_ramdump(int enable, const struct subsys_desc *subsys)
 	if (ret)
 		return ret;
 
-	ret = pil_do_ramdump(&drv->q6->desc,
-			drv->ramdump_dev, drv->minidump_dev);
+	ret = pil_do_ramdump(&drv->q6->desc, drv->ramdump_dev);
 	if (ret < 0)
 		pr_err("Unable to dump modem fw memory (rc = %d).\n", ret);
 
@@ -205,6 +208,8 @@ static int pil_subsys_init(struct modem_data *drv,
 {
 	int ret;
 
+	mfr_failure_reason[0]='\0';
+
 	drv->subsys_desc.name = "modem";
 	drv->subsys_desc.dev = &pdev->dev;
 	drv->subsys_desc.owner = THIS_MODULE;
@@ -231,18 +236,9 @@ static int pil_subsys_init(struct modem_data *drv,
 		ret = -ENOMEM;
 		goto err_ramdump;
 	}
-	drv->minidump_dev = create_ramdump_device("md_modem", &pdev->dev);
-	if (!drv->minidump_dev) {
-		pr_err("%s: Unable to create a modem minidump device.\n",
-			__func__);
-		ret = -ENOMEM;
-		goto err_minidump;
-	}
 
 	return 0;
 
-err_minidump:
-	destroy_ramdump_device(drv->ramdump_dev);
 err_ramdump:
 	subsys_unregister(drv->subsys);
 err_subsys:
@@ -424,7 +420,6 @@ static int pil_mss_driver_exit(struct platform_device *pdev)
 
 	subsys_unregister(drv->subsys);
 	destroy_ramdump_device(drv->ramdump_dev);
-	destroy_ramdump_device(drv->minidump_dev);
 	pil_desc_release(&drv->q6->desc);
 	return 0;
 }

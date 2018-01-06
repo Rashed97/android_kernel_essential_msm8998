@@ -548,6 +548,10 @@ err_power:
 	return ret;
 }
 
+#ifdef CONFIG_ESSENTIAL_NV
+static bool essential_nv_assigned = false;
+#endif
+
 int pil_mss_reset_load_mba(struct pil_desc *pil)
 {
 	struct q6v5_data *drv = container_of(pil, struct q6v5_data, desc);
@@ -559,11 +563,30 @@ int pil_mss_reset_load_mba(struct pil_desc *pil)
 	char *fw_name_p;
 	void *mba_dp_virt;
 	dma_addr_t mba_dp_phys, mba_dp_phys_end;
-	int ret;
+	int ret, count;
 	const u8 *data;
 	struct device *dma_dev = md->mba_mem_dev_fixed ?: &md->mba_mem_dev;
 
-	trace_pil_func(__func__);
+        trace_pil_func(__func__);
+	#ifdef CONFIG_ESSENTIAL_NV
+	pr_notice("%s: %s\n", __func__, pil->name);
+	if (!(strncmp(pil->name, "modem", sizeof(char)*5)))
+	{
+		if (!essential_nv_assigned) {
+			pr_notice("%s: Assign %s memory 0xA0000000 0x00800000 (initial)\n", __func__, pil->name);
+			ret = pil_assign_mem_to_subsys_and_linux(pil, 0xA0000000, 0x00800000);
+			if (ret) {
+				pr_err("Failed to assign %s memory, ret - %d\n", pil->name, ret);
+				essential_nv_assigned = false;
+				return ret;
+			}
+			essential_nv_assigned = true;
+		} else {
+			pr_notice("%s: Assign %s memory 0xA0000000 0x00800000 (re-init)\n", __func__, pil->name);
+		}
+	}
+	#endif
+
 	fw_name_p = drv->non_elf_image ? fw_name_legacy : fw_name;
 	ret = request_firmware(&fw, fw_name_p, pil->dev);
 	if (ret) {
@@ -624,9 +647,10 @@ int pil_mss_reset_load_mba(struct pil_desc *pil)
 			&mba_dp_phys, &mba_dp_phys_end, drv->mba_dp_size);
 
 	/* Load the MBA image into memory */
-	if (fw->size <= SZ_1M) {
+	count = fw->size;
+	if (count <= SZ_1M) {
 		/* Ensures memcpy is done for max 1MB fw size */
-		memcpy(mba_dp_virt, data, fw->size);
+		memcpy(mba_dp_virt, data, count);
 	} else {
 		dev_err(pil->dev, "%s fw image loading into memory is failed due to fw size overflow\n",
 			__func__);

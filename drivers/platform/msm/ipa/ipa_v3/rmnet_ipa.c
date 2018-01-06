@@ -423,8 +423,6 @@ int ipa3_copy_ul_filter_rule_to_ipa(struct ipa_install_fltr_rule_req_msg_v01
 {
 	int i, j;
 
-	/* prevent multi-threads accessing rmnet_ipa3_ctx->num_q6_rules */
-	mutex_lock(&rmnet_ipa3_ctx->add_mux_channel_lock);
 	if (rule_req->filter_spec_ex_list_valid == true) {
 		rmnet_ipa3_ctx->num_q6_rules =
 			rule_req->filter_spec_ex_list_len;
@@ -433,8 +431,6 @@ int ipa3_copy_ul_filter_rule_to_ipa(struct ipa_install_fltr_rule_req_msg_v01
 	} else {
 		rmnet_ipa3_ctx->num_q6_rules = 0;
 		IPAWANERR("got no UL rules from modem\n");
-		mutex_unlock(&rmnet_ipa3_ctx->
-					add_mux_channel_lock);
 		return -EINVAL;
 	}
 
@@ -637,13 +633,9 @@ failure:
 	rmnet_ipa3_ctx->num_q6_rules = 0;
 	memset(ipa3_qmi_ctx->q6_ul_filter_rule, 0,
 		sizeof(ipa3_qmi_ctx->q6_ul_filter_rule));
-	mutex_unlock(&rmnet_ipa3_ctx->
-		add_mux_channel_lock);
 	return -EINVAL;
 
 success:
-	mutex_unlock(&rmnet_ipa3_ctx->
-		add_mux_channel_lock);
 	return 0;
 }
 
@@ -673,6 +665,8 @@ static int ipa3_wwan_add_ul_flt_rule_to_ipa(void)
 	param->ep = IPA_CLIENT_APPS_WAN_PROD;
 	param->global = false;
 	param->num_rules = (uint8_t)1;
+
+	memset(req, 0, sizeof(struct ipa_fltr_installed_notif_req_msg_v01));
 
 	for (i = 0; i < rmnet_ipa3_ctx->num_q6_rules; i++) {
 		param->ip = ipa3_qmi_ctx->q6_ul_filter_rule[i].ip;
@@ -1445,13 +1439,8 @@ static int handle3_egress_format(struct net_device *dev,
 
 	if (rmnet_ipa3_ctx->num_q6_rules != 0) {
 		/* already got Q6 UL filter rules*/
-		if (ipa3_qmi_ctx->modem_cfg_emb_pipe_flt == false) {
-			/* prevent multi-threads accessing num_q6_rules */
-			mutex_lock(&rmnet_ipa3_ctx->add_mux_channel_lock);
+		if (ipa3_qmi_ctx->modem_cfg_emb_pipe_flt == false)
 			rc = ipa3_wwan_add_ul_flt_rule_to_ipa();
-			mutex_unlock(&rmnet_ipa3_ctx->
-				add_mux_channel_lock);
-		}
 		if (rc)
 			IPAWANERR("install UL rules failed\n");
 		else
@@ -1647,8 +1636,8 @@ static int ipa3_wwan_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		/*  Get driver name  */
 		case RMNET_IOCTL_GET_DRIVER_NAME:
 			memcpy(&extend_ioctl_data.u.if_name,
-				IPA_NETDEV()->name,
-							sizeof(IFNAMSIZ));
+				IPA_NETDEV()->name, IFNAMSIZ);
+			extend_ioctl_data.u.if_name[IFNAMSIZ - 1] = '\0';
 			if (copy_to_user((u8 *)ifr->ifr_ifru.ifru_data,
 					&extend_ioctl_data,
 					sizeof(struct rmnet_ioctl_extended_s)))
@@ -1741,6 +1730,7 @@ static int ipa3_wwan_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 				sizeof(wan_msg->upstream_ifname);
 			strlcpy(wan_msg->upstream_ifname,
 				extend_ioctl_data.u.if_name, len);
+			wan_msg->upstream_ifname[len-1] = '\0';
 			memset(&msg_meta, 0, sizeof(struct ipa_msg_meta));
 			msg_meta.msg_type = WAN_XLAT_CONNECT;
 			msg_meta.msg_len = sizeof(struct ipa_wan_msg);

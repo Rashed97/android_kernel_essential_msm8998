@@ -582,7 +582,7 @@
 				config {
 					pins = "gpio37";
 					drive-strength = <2>;
-					bias-pull-up;
+					bias-pull-down;
 				};
 			};
 
@@ -595,7 +595,7 @@
 				config {
 					pins = "gpio37";
 					drive-strength = <2>;
-					bias-pull-up;
+					bias-disable;
 				};
 			};
 		};
