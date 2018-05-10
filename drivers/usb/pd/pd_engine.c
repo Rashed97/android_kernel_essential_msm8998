@@ -1270,7 +1270,7 @@ static void pd_phy_signal_rx(struct usbpd *pd, enum pd_sig_type type)
 	}
 }
 
-static void pd_phy_message_rx(struct usbpd *pd, enum pd_msg_type type,
+static void pd_phy_message_rx(struct usbpd *pd, enum pd_sop_type type,
 			      u8 *buf, size_t len)
 {
 	struct pd_message msg;
